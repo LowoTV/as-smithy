@@ -1,13 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import ReactMarkdown from "react-markdown";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "@/hooks/use-toast";
-import { FolderOpen, Save, HelpCircle, FileText, ArrowRight, Upload } from "lucide-react";
+import { FileText } from "lucide-react";
 import pako from "pako";
+import WaveList from "./wave-editor/WaveList";
+import EventList from "./wave-editor/EventList";
+import PropertiesEditor from "./wave-editor/PropertiesEditor";
+import FileControls from "./wave-editor/FileControls";
 
 // Utility: base64 <-> bytes
 function base64ToBytes(b64: string): Uint8Array {
@@ -85,15 +83,27 @@ function reinsertStars(b64: string, starPositions: number[]): string {
 }
 
 interface BlockMatch {
-  index: number; // block index among matches
+  index: number;
   quote: '"' | "'";
-  innerStart: number; // start index of inner content (without quotes)
-  innerEnd: number; // end index of inner content (without quotes)
-  original: string; // original inner content (as in file)
-  cleanedB64: string; // original with * and whitespace removed
-  starsAt: number[]; // positions to reinsert
-  decodedText?: string; // lazily decoded
+  innerStart: number;
+  innerEnd: number;
+  original: string;
+  cleanedB64: string;
+  starsAt: number[];
+  decodedText?: string;
   likelyWaves: boolean;
+}
+
+interface Wave {
+  index: number;
+  content: string;
+  events: Event[];
+}
+
+interface Event {
+  index: number;
+  type: string;
+  content: string;
 }
 
 const WAVY_HINTS = ["AddBloon", "FollowBezier", "CreateTrain", "Wave", "Bloon", "AddWave"];
@@ -107,12 +117,48 @@ const WaveEditor: React.FC = () => {
   const [blocks, setBlocks] = useState<BlockMatch[]>([]);
   const [selectedBlockIdx, setSelectedBlockIdx] = useState<number | null>(null);
 
-  const [blockText, setBlockText] = useState<string>("");
-  const [lines, setLines] = useState<string[]>([]);
-  const [selectedLine, setSelectedLine] = useState<number | null>(null);
-  const [lineDraft, setLineDraft] = useState<string>("");
+  const [waves, setWaves] = useState<Wave[]>([]);
+  const [selectedWaveIndex, setSelectedWaveIndex] = useState<number | null>(null);
+  const [selectedEventIndex, setSelectedEventIndex] = useState<number | null>(null);
+  const [eventDraft, setEventDraft] = useState<string>("");
 
   const [helpMarkdown, setHelpMarkdown] = useState<string>("");
+
+  const parseWaves = useCallback((decodedText: string): Wave[] => {
+    const lines = decodedText.split(/\r?\n/).filter(line => line.trim());
+    const waves: Wave[] = [];
+    let currentWave: Wave | null = null;
+    
+    lines.forEach((line, index) => {
+      if (line.includes("AddWave") || line.includes("CreateTrain")) {
+        if (currentWave) {
+          waves.push(currentWave);
+        }
+        currentWave = {
+          index: waves.length,
+          content: line,
+          events: []
+        };
+      } else if (currentWave) {
+        const eventType = line.includes("AddBloon") ? "AddBloon" :
+                         line.includes("FollowBezier") ? "FollowBezier" :
+                         line.includes("CreateTrain") ? "CreateTrain" :
+                         "Unknown";
+        
+        currentWave.events.push({
+          index: currentWave.events.length,
+          type: eventType,
+          content: line
+        });
+      }
+    });
+    
+    if (currentWave) {
+      waves.push(currentWave);
+    }
+    
+    return waves;
+  }, []);
 
   const parseBlocks = useCallback((content: string): BlockMatch[] => {
     const rx = /(["'])(([A-Za-z0-9+/=\s\*]{64,}))\1/gm;
@@ -122,7 +168,7 @@ const WaveEditor: React.FC = () => {
     while ((m = rx.exec(content)) !== null) {
       const quote = m[1] as '"' | "'";
       const inner = m[2];
-      const innerStart = (m.index ?? 0) + 1; // after opening quote
+      const innerStart = (m.index ?? 0) + 1;
       const innerEnd = innerStart + inner.length;
       const cleaned = inner.replace(/[\s\*]/g, "");
       const starsAt = collectStarIndices(inner);
@@ -161,9 +207,11 @@ const WaveEditor: React.FC = () => {
       if (firstDecodable) {
         const txt = firstDecodable.decodedText!;
         setSelectedBlockIdx(firstDecodable.index);
-        setBlockText(txt);
-        const ls = txt.split(/\r?\n/);
-        setLines(ls);
+        const parsedWaves = parseWaves(txt);
+        setWaves(parsedWaves);
+        if (parsedWaves.length > 0) {
+          setSelectedWaveIndex(0);
+        }
       } else {
         toast({ title: "Decode failed", description: "Found blocks but failed to decode. You can still export raw payloads." });
       }
@@ -182,27 +230,31 @@ const WaveEditor: React.FC = () => {
     e.currentTarget.value = ""; // reset
   }, [onOpenFile]);
 
-  useEffect(() => {
-    setLines(blockText.split(/\r?\n/));
-  }, [blockText]);
+  const handleSelectWave = useCallback((index: number) => {
+    setSelectedWaveIndex(index);
+    setSelectedEventIndex(null);
+    setEventDraft("");
+  }, []);
 
-  useEffect(() => {
-    if (selectedLine != null) {
-      setLineDraft(lines[selectedLine] ?? "");
-    } else {
-      setLineDraft("");
-    }
-  }, [selectedLine, lines]);
+  const handleSelectEvent = useCallback((index: number) => {
+    setSelectedEventIndex(index);
+    const selectedWave = waves[selectedWaveIndex!];
+    const selectedEvent = selectedWave?.events[index];
+    setEventDraft(selectedEvent?.content || "");
+  }, [waves, selectedWaveIndex]);
 
-  const applyLineEdit = useCallback(() => {
-    if (selectedLine == null) return;
-    const next = [...lines];
-    next[selectedLine] = lineDraft;
-    const joined = next.join("\n");
-    setLines(next);
-    setBlockText(joined);
-    toast({ title: "Line updated", description: `Updated line #${selectedLine + 1}` });
-  }, [selectedLine, lineDraft, lines]);
+  const handleApplyEventEdit = useCallback(() => {
+    if (selectedWaveIndex == null || selectedEventIndex == null) return;
+    
+    const newWaves = [...waves];
+    newWaves[selectedWaveIndex].events[selectedEventIndex].content = eventDraft;
+    setWaves(newWaves);
+    
+    toast({ 
+      title: "Event updated", 
+      description: `Updated event ${selectedEventIndex + 1} in wave ${selectedWaveIndex + 1}` 
+    });
+  }, [waves, selectedWaveIndex, selectedEventIndex, eventDraft]);
 
   const exportEdited = useCallback(() => {
     if (!fileContent || selectedBlockIdx == null) {
@@ -213,7 +265,13 @@ const WaveEditor: React.FC = () => {
     if (!blk) return;
 
     try {
-      const deflated = encodeZlibBase64(blockText);
+      // Reconstruct the wave text from current waves state
+      const waveText = waves.map(wave => {
+        const waveLines = [wave.content, ...wave.events.map(event => event.content)];
+        return waveLines.join('\n');
+      }).join('\n');
+
+      const deflated = encodeZlibBase64(waveText);
       const reB64 = bytesToBase64(deflated);
       const finalB64 = blk.starsAt.length ? reinsertStars(reB64, blk.starsAt) : reB64;
 
@@ -235,7 +293,7 @@ const WaveEditor: React.FC = () => {
     } catch (e: any) {
       toast({ title: "Encode/export failed", description: e?.message ?? String(e) });
     }
-  }, [fileContent, selectedBlockIdx, blocks, blockText, fileName]);
+  }, [fileContent, selectedBlockIdx, blocks, waves, fileName]);
 
   const openHelpFile = useCallback((file: File) => {
     file.text().then(setHelpMarkdown).catch((e) => {
@@ -243,10 +301,8 @@ const WaveEditor: React.FC = () => {
     });
   }, []);
 
-  const likelyBlocks = useMemo(() => blocks.map((b) => ({
-    index: b.index,
-    label: b.likelyWaves ? `Block #${b.index + 1} — Likely Waves` : `Block #${b.index + 1}`,
-  })), [blocks]);
+  const selectedWave = selectedWaveIndex !== null ? waves[selectedWaveIndex] : null;
+  const selectedEvent = selectedWave && selectedEventIndex !== null ? selectedWave.events[selectedEventIndex] : null;
 
   return (
     <div className="min-h-screen w-full bg-background text-foreground">
@@ -254,136 +310,53 @@ const WaveEditor: React.FC = () => {
         <div className="container mx-auto px-4 py-4 flex items-center gap-3">
           <FileText className="h-6 w-6 text-foreground" aria-hidden />
           <h1 className="text-xl font-semibold">BSM2 Wave Editor</h1>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto">
             <input ref={fileInputRef} type="file" accept=".as,text/plain" className="hidden" onChange={handleFileChange} />
-            <Button variant="secondary" onClick={handleChooseFile}>
-              <FolderOpen className="mr-2 h-4 w-4" /> Open .as
-            </Button>
-            <Button variant="default" onClick={exportEdited}>
-              <Save className="mr-2 h-4 w-4" /> Save As / Export
-            </Button>
             <input ref={helpInputRef} type="file" accept=".md,text/markdown" className="hidden" onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) openHelpFile(f);
               e.currentTarget.value = "";
             }} />
-            <Button variant="outline" onClick={() => helpInputRef.current?.click()}>
-              <Upload className="mr-2 h-4 w-4" /> Load Help .md
-            </Button>
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button variant="ghost">
-                  <HelpCircle className="mr-2 h-4 w-4" /> Help
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-3xl">
-                <DialogHeader>
-                  <DialogTitle>Help</DialogTitle>
-                </DialogHeader>
-                <div className="prose prose-sm dark:prose-invert max-h-[60vh] overflow-y-auto">
-                  {helpMarkdown ? (
-                    <ReactMarkdown>{helpMarkdown}</ReactMarkdown>
-                  ) : (
-                    <p className="text-muted-foreground">Load a Markdown help file to display it here.</p>
-                  )}
-                </div>
-              </DialogContent>
-            </Dialog>
+            <FileControls
+              onOpenFile={handleChooseFile}
+              onExport={exportEdited}
+              onLoadHelp={() => helpInputRef.current?.click()}
+              helpMarkdown={helpMarkdown}
+              fileName={fileName}
+            />
           </div>
         </div>
         <div className="h-1 bg-gradient-to-r from-primary/70 via-accent/60 to-secondary" />
       </header>
 
-      <main className="container mx-auto px-4 py-6 grid grid-cols-1 md:grid-cols-12 gap-4">
-        <aside className="md:col-span-3">
-          <Card className="p-3">
-            <div className="mb-2">
-              <h2 className="text-sm font-medium">Blocks</h2>
-              <p className="text-xs text-muted-foreground">Select a decoded block (preferably Waves)</p>
-            </div>
-            <div className="flex flex-col gap-2">
-              {likelyBlocks.length ? (
-                likelyBlocks.map((b) => (
-                  <Button
-                    key={b.index}
-                    variant={selectedBlockIdx === b.index ? "default" : "secondary"}
-                    onClick={() => {
-                      const blk = blocks.find((x) => x.index === b.index);
-                      if (!blk?.decodedText) {
-                        toast({ title: "Cannot decode", description: "This block failed to decode." });
-                        return;
-                      }
-                      setSelectedBlockIdx(b.index);
-                      setBlockText(blk.decodedText);
-                      setSelectedLine(null);
-                    }}
-                  >
-                    {b.label}
-                  </Button>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">Open a file to list blocks.</p>
-              )}
-            </div>
-          </Card>
+      <main className="container mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-140px)]">
+        <div className="lg:col-span-3">
+          <WaveList
+            waves={waves}
+            selectedWaveIndex={selectedWaveIndex}
+            onSelectWave={handleSelectWave}
+          />
+        </div>
 
-          <Card className="p-3 mt-4">
-            <div className="mb-2">
-              <h2 className="text-sm font-medium">Waves</h2>
-              <p className="text-xs text-muted-foreground">Select a line to edit</p>
-            </div>
-            <ScrollArea className="h-[40vh]">
-              <div className="flex flex-col">
-                {lines.filter((l) => l.trim().length > 0).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No content decoded yet.</p>
-                ) : (
-                  lines.map((l, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setSelectedLine(i)}
-                      className={`text-left px-2 py-1 border-b hover:bg-accent/60 focus:outline-none ${selectedLine === i ? 'bg-accent' : ''}`}
-                    >
-                      <span className="text-xs text-muted-foreground mr-2">{i + 1}.</span>
-                      <span className="truncate inline-block max-w-full align-top">{l}</span>
-                    </button>
-                  ))
-                )}
-              </div>
-            </ScrollArea>
-          </Card>
-        </aside>
+        <div className="lg:col-span-4">
+          <EventList
+            events={selectedWave?.events || []}
+            selectedEventIndex={selectedEventIndex}
+            onSelectEvent={handleSelectEvent}
+            selectedWaveIndex={selectedWaveIndex}
+          />
+        </div>
 
-        <section className="md:col-span-4">
-          <Card className="p-3 h-full">
-            <h2 className="text-sm font-medium mb-2">Events (placeholder)</h2>
-            <div className="text-sm text-muted-foreground">
-              Structured event editor coming soon.
-            </div>
-          </Card>
-        </section>
-
-        <section className="md:col-span-5">
-          <Card className="p-3 h-full flex flex-col gap-3">
-            <div>
-              <h2 className="text-sm font-medium">Raw Editor</h2>
-              <p className="text-xs text-muted-foreground">Editing applies to the decoded block; export to write back into the .as file.</p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs text-muted-foreground">Selected line</label>
-              <div className="flex items-center gap-2">
-                <Textarea rows={2} value={lineDraft} onChange={(e) => setLineDraft(e.target.value)} placeholder={selectedLine != null ? `Line #${selectedLine + 1}` : "Pick a line from the left"} />
-                <Button variant="secondary" onClick={applyLineEdit} disabled={selectedLine == null}>
-                  Apply <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex-1">
-              <Textarea className="h-[44vh]" value={blockText} onChange={(e) => setBlockText(e.target.value)} placeholder="Decoded block will appear here..." />
-            </div>
-          </Card>
-        </section>
+        <div className="lg:col-span-5">
+          <PropertiesEditor
+            selectedEvent={selectedEvent}
+            eventDraft={eventDraft}
+            onEventDraftChange={setEventDraft}
+            onApplyEdit={handleApplyEventEdit}
+            selectedWaveIndex={selectedWaveIndex}
+            selectedEventIndex={selectedEventIndex}
+          />
+        </div>
       </main>
 
       <footer className="border-t">
