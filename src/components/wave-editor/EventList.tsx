@@ -44,13 +44,13 @@ const EventList: React.FC<EventListProps> = ({
               <Button
                 key={index}
                 variant={selectedEventIndex === index ? "default" : "ghost"}
-                className="justify-start h-auto p-2 text-left"
+                className="justify-start h-auto p-3 text-left touch-manipulation min-h-[3rem]"
                 onClick={() => onSelectEvent(index)}
               >
                 <div className="w-full">
                   <div className="font-medium text-sm">{event.type || `Event ${index + 1}`}</div>
-                  <div className="text-xs text-muted-foreground truncate">
-                    {event.content.slice(0, 50)}...
+                  <div className="text-xs text-muted-foreground line-clamp-2 whitespace-normal">
+                    {event.content}
                   </div>
                 </div>
               </Button>

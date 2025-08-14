@@ -37,7 +37,7 @@ const WaveList: React.FC<WaveListProps> = ({ waves, selectedWaveIndex, onSelectW
               <Button
                 key={index}
                 variant={selectedWaveIndex === index ? "default" : "ghost"}
-                className="justify-start h-auto p-2 text-left"
+                className="justify-start h-auto p-3 text-left touch-manipulation"
                 onClick={() => onSelectWave(index)}
               >
                 <div className="w-full">
