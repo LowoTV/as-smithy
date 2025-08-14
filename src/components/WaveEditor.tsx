@@ -382,8 +382,8 @@ const WaveEditor: React.FC = () => {
         <div className="h-1 bg-gradient-to-r from-primary/70 via-accent/60 to-secondary" />
       </header>
 
-      <main className="container mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-140px)]">
-        <div className="lg:col-span-3">
+      <main className="container mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[calc(100vh-140px)]">
+        <div className="lg:col-span-3 h-80 lg:h-[calc(100vh-140px)]">
           <WaveList
             waves={waves}
             selectedWaveIndex={selectedWaveIndex}
@@ -391,7 +391,7 @@ const WaveEditor: React.FC = () => {
           />
         </div>
 
-        <div className="lg:col-span-4">
+        <div className="lg:col-span-4 h-80 lg:h-[calc(100vh-140px)]">
           <EventList
             events={selectedWave?.events || []}
             selectedEventIndex={selectedEventIndex}
@@ -400,7 +400,7 @@ const WaveEditor: React.FC = () => {
           />
         </div>
 
-        <div className="lg:col-span-5">
+        <div className="lg:col-span-5 h-96 lg:h-[calc(100vh-140px)]">
           <PropertiesEditor
             selectedEvent={selectedEvent}
             eventDraft={eventDraft}
