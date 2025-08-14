@@ -126,20 +126,50 @@ const WaveEditor: React.FC = () => {
 
   const parseWaves = useCallback((decodedText: string): Wave[] => {
     const lines = decodedText.split(/\r?\n/).filter(line => line.trim());
+    console.log('Parsing waves from decoded text, total lines:', lines.length);
+    console.log('First few lines:', lines.slice(0, 5));
+    
     const waves: Wave[] = [];
     let currentWave: Wave | null = null;
+    let orphanedLines: string[] = []; // Lines before first wave
     
     lines.forEach((line, index) => {
-      if (line.includes("AddWave") || line.includes("CreateTrain")) {
+      // More flexible wave detection - look for wave-starting patterns
+      const isWaveStart = line.includes("AddWave") || 
+                         line.includes("CreateTrain") ||
+                         /^Wave\s*\d+/i.test(line.trim()) ||
+                         (line.includes("(") && line.includes(")") && index === 0); // First line with parameters
+      
+      if (isWaveStart) {
+        // If we have orphaned lines and no current wave, create a wave for them
+        if (orphanedLines.length > 0 && !currentWave) {
+          waves.push({
+            index: waves.length,
+            content: `Wave ${waves.length + 1}`, // Default wave header
+            events: orphanedLines.map((orphanLine, orphanIndex) => ({
+              index: orphanIndex,
+              type: orphanLine.includes("AddBloon") ? "AddBloon" :
+                    orphanLine.includes("FollowBezier") ? "FollowBezier" :
+                    orphanLine.includes("CreateTrain") ? "CreateTrain" :
+                    "Unknown",
+              content: orphanLine
+            }))
+          });
+          orphanedLines = [];
+        }
+        
+        // Push previous wave if exists
         if (currentWave) {
           waves.push(currentWave);
         }
+        
         currentWave = {
           index: waves.length,
           content: line,
           events: []
         };
       } else if (currentWave) {
+        // Add to current wave as event
         const eventType = line.includes("AddBloon") ? "AddBloon" :
                          line.includes("FollowBezier") ? "FollowBezier" :
                          line.includes("CreateTrain") ? "CreateTrain" :
@@ -150,12 +180,35 @@ const WaveEditor: React.FC = () => {
           type: eventType,
           content: line
         });
+      } else {
+        // No wave yet, collect orphaned lines
+        orphanedLines.push(line);
       }
     });
     
+    // Handle remaining orphaned lines if no waves were created
+    if (orphanedLines.length > 0 && waves.length === 0 && !currentWave) {
+      waves.push({
+        index: 0,
+        content: `Wave 1`, // Default wave header
+        events: orphanedLines.map((orphanLine, orphanIndex) => ({
+          index: orphanIndex,
+          type: orphanLine.includes("AddBloon") ? "AddBloon" :
+                orphanLine.includes("FollowBezier") ? "FollowBezier" :
+                orphanLine.includes("CreateTrain") ? "CreateTrain" :
+                "Unknown",
+          content: orphanLine
+        }))
+      });
+    }
+    
+    // Push final wave
     if (currentWave) {
       waves.push(currentWave);
     }
+    
+    console.log('Parsed waves:', waves.length);
+    console.log('Wave summary:', waves.map(w => `Wave ${w.index + 1}: ${w.events.length} events`));
     
     return waves;
   }, []);
