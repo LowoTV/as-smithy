@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "@/hooks/use-toast";
 import { FileText } from "lucide-react";
+import { Link } from "react-router-dom";
 import pako from "pako";
 import WaveList from "./wave-editor/WaveList";
 import EventList from "./wave-editor/EventList";
@@ -450,6 +451,11 @@ const WaveEditor: React.FC = () => {
         <div className="container mx-auto px-4 py-4 flex items-center gap-3">
           <FileText className="h-6 w-6 text-foreground" aria-hidden />
           <h1 className="text-xl font-semibold">BSM2 Wave Editor</h1>
+          <nav className="ml-6">
+            <Link to="/environment" className="text-sm text-muted-foreground hover:text-foreground">
+              Environment Editor
+            </Link>
+          </nav>
           <div className="ml-auto">
             <input ref={fileInputRef} type="file" accept=".as,text/plain" className="hidden" onChange={handleFileChange} />
             <input ref={helpInputRef} type="file" accept=".md,text/markdown" className="hidden" onChange={(e) => {
