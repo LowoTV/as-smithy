@@ -107,7 +107,18 @@ interface BlockMatch {
   likelyEnvironment: boolean;
 }
 
-const ENV_HINTS = ["var ", "const ", "let ", "this.", "Environment", "Config", "Setting"];
+// Specific patterns for environment variable detection
+const ENV_VARIABLE_PATTERNS = [
+  /environment\s*[:=]/i,
+  /Environment\s*[:=]/i, 
+  /env\s*[:=]/i,
+  /environmentVars\s*[:=]/i,
+  /envSettings\s*[:=]/i,
+  /config\s*[:=]/i,
+  /settings\s*[:=]/i
+];
+
+const ENV_HINTS = ["environment", "Environment", "env", "environmentVars", "envSettings", "config", "settings"];
 
 const EnvironmentEditor: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -180,22 +191,33 @@ const EnvironmentEditor: React.FC = () => {
     return variables;
   }, []);
 
-  const parseBlocks = useCallback((content: string): BlockMatch[] => {
-    const rx = /(["'])(([A-Za-z0-9+/=\s\*]{64,}))\1/gm;
+  const parseEnvironmentBlocks = useCallback((content: string): BlockMatch[] => {
+    // First, look for specific environment variable assignments
+    const envVariableRegex = /(environment\s*[:=]\s*)(["'])(([A-Za-z0-9+/=\s\*]+))\2/gi;
     const matches: BlockMatch[] = [];
     let m: RegExpExecArray | null;
     let idx = 0;
-    while ((m = rx.exec(content)) !== null) {
-      const quote = m[1] as '"' | "'";
-      const inner = m[2];
-      const innerStart = (m.index ?? 0) + 1;
+
+    // Look for environment-specific blocks first
+    while ((m = envVariableRegex.exec(content)) !== null) {
+      const quote = m[2] as '"' | "'";
+      const inner = m[3];
+      const innerStart = (m.index ?? 0) + m[1].length + 1; // Skip past "environment=" and quote
       const innerEnd = innerStart + inner.length;
       const cleaned = inner.replace(/[\s\*]/g, "");
       const starsAt = collectStarIndices(inner);
+      
       let decoded: string | undefined = undefined;
       const res = decodeZlibBase64(cleaned);
-      if (res.ok) decoded = res.text;
-      const likely = !!decoded && ENV_HINTS.some((h) => decoded!.includes(h));
+      if (res.ok) {
+        decoded = res.text;
+        console.log('Found environment block:', { 
+          index: idx, 
+          decodedLength: decoded.length,
+          preview: decoded.substring(0, 100) + '...'
+        });
+      }
+      
       matches.push({
         index: idx++,
         quote,
@@ -205,10 +227,57 @@ const EnvironmentEditor: React.FC = () => {
         cleanedB64: cleaned,
         starsAt,
         decodedText: decoded,
-        likelyEnvironment: likely,
+        likelyEnvironment: true, // Always true for environment-specific matches
       });
     }
-    return matches;
+
+    // If no specific environment blocks found, fall back to generic search with stricter filtering
+    if (matches.length === 0) {
+      console.log('No specific environment blocks found, searching generic blocks...');
+      const rx = /(["'])(([A-Za-z0-9+/=\s\*]{64,}))\1/gm;
+      while ((m = rx.exec(content)) !== null) {
+        const quote = m[1] as '"' | "'";
+        const inner = m[2];
+        const innerStart = (m.index ?? 0) + 1;
+        const innerEnd = innerStart + inner.length;
+        const cleaned = inner.replace(/[\s\*]/g, "");
+        const starsAt = collectStarIndices(inner);
+        
+        let decoded: string | undefined = undefined;
+        const res = decodeZlibBase64(cleaned);
+        if (res.ok) {
+          decoded = res.text;
+          
+          // Check if this block contains environment-like patterns
+          const hasEnvPattern = ENV_VARIABLE_PATTERNS.some(pattern => pattern.test(decoded!));
+          const hasEnvHints = ENV_HINTS.some((h) => decoded!.toLowerCase().includes(h.toLowerCase()));
+          
+          if (hasEnvPattern || hasEnvHints) {
+            console.log('Found potential environment block:', { 
+              index: idx, 
+              hasEnvPattern,
+              hasEnvHints,
+              preview: decoded.substring(0, 100) + '...'
+            });
+            
+            matches.push({
+              index: idx++,
+              quote,
+              innerStart,
+              innerEnd,
+              original: inner,
+              cleanedB64: cleaned,
+              starsAt,
+              decodedText: decoded,
+              likelyEnvironment: hasEnvPattern || hasEnvHints,
+            });
+          }
+        }
+      }
+    }
+
+    console.log(`Found ${matches.length} environment-related blocks`);
+    return matches.filter(m => m.likelyEnvironment); // Only return likely environment blocks
   }, []);
 
   const onOpenFile = useCallback(async (file: File) => {
@@ -216,10 +285,10 @@ const EnvironmentEditor: React.FC = () => {
       const text = await file.text();
       setFileName(file.name);
       setFileContent(text);
-      const found = parseBlocks(text);
+      const found = parseEnvironmentBlocks(text);
       setBlocks(found);
       if (!found.length) {
-        toast({ title: "No blocks found", description: "No quoted base64+zlib blocks detected." });
+        toast({ title: "No environment blocks found", description: "No environment variable blocks detected in this file." });
         return;
       }
       const preferred = found.find((b) => b.likelyEnvironment && b.decodedText);
@@ -235,7 +304,7 @@ const EnvironmentEditor: React.FC = () => {
     } catch (e: any) {
       toast({ title: "Open failed", description: e?.message ?? String(e) });
     }
-  }, [parseBlocks, parseEnvironmentVariables]);
+  }, [parseEnvironmentBlocks, parseEnvironmentVariables]);
 
   const handleChooseFile = useCallback(() => {
     fileInputRef.current?.click();
