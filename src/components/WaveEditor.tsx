@@ -6,6 +6,7 @@ import WaveList from "./wave-editor/WaveList";
 import EventList from "./wave-editor/EventList";
 import PropertiesEditor from "./wave-editor/PropertiesEditor";
 import FileControls from "./wave-editor/FileControls";
+import EnvironmentAssets from "./wave-editor/EnvironmentAssets";
 
 // Utility: base64 <-> bytes
 function base64ToBytes(b64: string): Uint8Array {
@@ -106,6 +107,14 @@ interface Event {
   content: string;
 }
 
+interface EnvironmentAsset {
+  index: number;
+  type: string;
+  name: string;
+  properties: Record<string, string>;
+  rawContent: string;
+}
+
 const WAVY_HINTS = ["AddBloon", "FollowBezier", "CreateTrain", "Wave", "Bloon", "AddWave"];
 
 const WaveEditor: React.FC = () => {
@@ -121,6 +130,7 @@ const WaveEditor: React.FC = () => {
   const [selectedWaveIndex, setSelectedWaveIndex] = useState<number | null>(null);
   const [selectedEventIndex, setSelectedEventIndex] = useState<number | null>(null);
   const [eventDraft, setEventDraft] = useState<string>("");
+  const [environmentAssets, setEnvironmentAssets] = useState<EnvironmentAsset[]>([]);
 
   const [helpMarkdown, setHelpMarkdown] = useState<string>("");
 
@@ -213,6 +223,81 @@ const WaveEditor: React.FC = () => {
     return waves;
   }, []);
 
+  const parseEnvironmentAssets = useCallback((decodedText: string): EnvironmentAsset[] => {
+    const lines = decodedText.split(/\r?\n/).filter(line => line.trim());
+    const assets: EnvironmentAsset[] = [];
+    
+    // Look for asset-related patterns
+    const assetPatterns = [
+      /LoadTexture\s*\(/i,
+      /LoadSound\s*\(/i,
+      /LoadModel\s*\(/i,
+      /LoadScript\s*\(/i,
+      /Asset\s*\(/i,
+      /Environment\s*\(/i,
+      /Texture\s*=/i,
+      /Sound\s*=/i,
+      /Model\s*=/i,
+      /Background\s*=/i,
+      /Skybox\s*=/i
+    ];
+    
+    lines.forEach((line, index) => {
+      const trimmedLine = line.trim();
+      
+      for (const pattern of assetPatterns) {
+        if (pattern.test(trimmedLine)) {
+          // Extract asset type from the pattern
+          let assetType = 'Unknown';
+          if (/texture|image/i.test(trimmedLine)) assetType = 'Texture';
+          else if (/sound|audio/i.test(trimmedLine)) assetType = 'Audio';
+          else if (/model|3d/i.test(trimmedLine)) assetType = 'Model';
+          else if (/script|code/i.test(trimmedLine)) assetType = 'Script';
+          else if (/background|skybox/i.test(trimmedLine)) assetType = 'Background';
+          else if (/environment/i.test(trimmedLine)) assetType = 'Environment';
+          
+          // Extract name and properties
+          const properties: Record<string, string> = {};
+          let name = `Asset ${assets.length + 1}`;
+          
+          // Try to extract parameters from parentheses
+          const paramMatch = trimmedLine.match(/\(([^)]+)\)/);
+          if (paramMatch) {
+            const params = paramMatch[1].split(',').map(p => p.trim());
+            params.forEach((param, i) => {
+              if (i === 0 && param.includes('"') || param.includes("'")) {
+                name = param.replace(/['"]/g, '');
+              } else if (param.includes('=')) {
+                const [key, value] = param.split('=', 2);
+                properties[key.trim()] = value.trim();
+              } else if (param) {
+                properties[`param${i}`] = param;
+              }
+            });
+          }
+          
+          // Try to extract name from assignment patterns
+          const assignMatch = trimmedLine.match(/(\w+)\s*=/);
+          if (assignMatch && !name.startsWith('Asset')) {
+            name = assignMatch[1];
+          }
+          
+          assets.push({
+            index: assets.length,
+            type: assetType,
+            name,
+            properties,
+            rawContent: trimmedLine
+          });
+          break;
+        }
+      }
+    });
+    
+    console.log('Parsed environment assets:', assets.length);
+    return assets;
+  }, []);
+
   const parseBlocks = useCallback((content: string): BlockMatch[] => {
     const rx = /(["'])(([A-Za-z0-9+/=\s\*]{64,}))\1/gm;
     const matches: BlockMatch[] = [];
@@ -261,7 +346,9 @@ const WaveEditor: React.FC = () => {
         const txt = firstDecodable.decodedText!;
         setSelectedBlockIdx(firstDecodable.index);
         const parsedWaves = parseWaves(txt);
+        const parsedAssets = parseEnvironmentAssets(txt);
         setWaves(parsedWaves);
+        setEnvironmentAssets(parsedAssets);
         if (parsedWaves.length > 0) {
           setSelectedWaveIndex(0);
         }
@@ -383,7 +470,7 @@ const WaveEditor: React.FC = () => {
       </header>
 
       <main className="container mx-auto px-4 py-6 flex flex-col lg:grid lg:grid-cols-12 gap-4 min-h-[calc(100vh-140px)]">
-        <div className="lg:col-span-3 h-64 sm:h-80 lg:h-[calc(100vh-140px)]">
+        <div className="lg:col-span-2 h-64 sm:h-80 lg:h-[calc(100vh-140px)]">
           <WaveList
             waves={waves}
             selectedWaveIndex={selectedWaveIndex}
@@ -391,7 +478,7 @@ const WaveEditor: React.FC = () => {
           />
         </div>
 
-        <div className="lg:col-span-4 h-64 sm:h-80 lg:h-[calc(100vh-140px)]">
+        <div className="lg:col-span-3 h-64 sm:h-80 lg:h-[calc(100vh-140px)]">
           <EventList
             events={selectedWave?.events || []}
             selectedEventIndex={selectedEventIndex}
@@ -400,7 +487,11 @@ const WaveEditor: React.FC = () => {
           />
         </div>
 
-        <div className="lg:col-span-5 flex-1 lg:h-[calc(100vh-140px)]">
+        <div className="lg:col-span-3 h-64 sm:h-80 lg:h-[calc(100vh-140px)]">
+          <EnvironmentAssets assets={environmentAssets} />
+        </div>
+
+        <div className="lg:col-span-4 flex-1 lg:h-[calc(100vh-140px)]">
           <PropertiesEditor
             selectedEvent={selectedEvent}
             eventDraft={eventDraft}
